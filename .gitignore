@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+*.pyo
+course_db.json
+.env
+*.session

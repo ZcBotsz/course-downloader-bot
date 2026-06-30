@@ -1,0 +1,8 @@
+{
+  "cron": {
+    "schedule": "0 0 * * *"
+  },
+  "watch": {
+    "paths": ["bot.py", "requirements.txt", "railway.json", "Procfile"]
+  }
+}
