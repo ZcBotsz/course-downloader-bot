@@ -4,3 +4,4 @@ __pycache__/
 course_db.json
 .env
 *.session
+*.session-journal
