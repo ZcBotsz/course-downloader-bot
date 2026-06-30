@@ -25,11 +25,15 @@ DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
 MAX_CONCURRENT = 3
 
 # Auth headers (from env or /auth command)
-CLIENT_ID = os.getenv("CLIENT_ID", "")
+# Client-ID found from DEX analysis: 5eb393ee95fab7468a79d189
+CLIENT_ID = os.getenv("CLIENT_ID", "5eb393ee95fab7468a79d189")
+# Authorization/Bearer token — needs to be obtained from key.php or installed app
 AUTH_TOKEN = os.getenv("AUTH_TOKEN", "")
 auth_headers = {}
 if CLIENT_ID and AUTH_TOKEN:
     auth_headers = {"client-id": CLIENT_ID, "Authorization": AUTH_TOKEN}
+elif CLIENT_ID:
+    auth_headers = {"client-id": CLIENT_ID}
 
 
 class CourseDB:
