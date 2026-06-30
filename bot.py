@@ -39,19 +39,67 @@ elif CLIENT_ID:
 
 PENDING_LOGIN = {}
 
+# ── DEFAULT DB DATA ────────────────────────────────────────────
+DEFAULT_DB = {"batches": {}, "videos": {}, "downloaded": {}, "auth_token": ""}
+
+
+# ── SAFE FILE HELPERS ──────────────────────────────────────────
+def safe_read_json(path, default):
+    """Read a JSON file safely. Returns `default` on any error."""
+    try:
+        p = Path(path)
+        if p.exists() and p.stat().st_size > 0:
+            raw = p.read_text(encoding="utf-8")
+            return json.loads(raw)
+    except (json.JSONDecodeError, OSError, PermissionError) as e:
+        print(f"Warning: failed to read {path}, using defaults: {e}")
+    return default
+
+
+def safe_write_json(path, data):
+    """Write a JSON file, creating parent dirs. Returns True on success."""
+    try:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        return True
+    except OSError as e:
+        print(f"Warning: failed to write {path}: {e}")
+        return False
+
+
+def safe_exists(path):
+    """Check if a path exists (handles race conditions on ephemeral fs)."""
+    try:
+        return Path(path).exists()
+    except OSError:
+        return False
+
+
+def safe_stat_size(path):
+    """Return file size in bytes, or 0 if the file doesn't exist / can't be read."""
+    try:
+        p = Path(path)
+        if p.exists():
+            return p.stat().st_size
+    except OSError:
+        pass
+    return 0
+
+
 # ── DATABASE ───────────────────────────────────────────────────
 class CourseDB:
     def __init__(self, path="course_db.json"):
         self.path = Path(path)
+        # Ensure the directory exists immediately (Railway ephemeral fs)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
         self.data = self._load()
 
     def _load(self):
-        if self.path.exists():
-            return json.loads(self.path.read_text())
-        return {"batches": {}, "videos": {}, "downloaded": {}, "auth_token": ""}
+        return safe_read_json(self.path, DEFAULT_DB)
 
     def save(self):
-        self.path.write_text(json.dumps(self.data, indent=2))
+        safe_write_json(self.path, self.data)
 
     def is_downloaded(self, video_id):
         return video_id in self.data.get("downloaded", {})
@@ -68,6 +116,10 @@ class CourseDB:
 
     def get_auth_token(self):
         return self.data.get("auth_token", "")
+
+    def db_size_kb(self):
+        """Return the database file size in KB safely. Returns 0 on missing / error."""
+        return safe_stat_size(self.path) // 1024
 
 
 db = CourseDB()
@@ -187,12 +239,15 @@ bot = TelegramClient('downloader_bot', API_ID, API_HASH)
 
 # ── HELPERS ────────────────────────────────────────────────────
 async def extract_thumbnail(video_path, thumb_path):
+    """Extract the ORIGINAL first frame as thumbnail using ffmpeg"""
+    thumb_path = Path(thumb_path) if not isinstance(thumb_path, Path) else thumb_path
+    thumb_path.parent.mkdir(parents=True, exist_ok=True)
     cmd = [FFMPEG, "-y", "-i", str(video_path),
            "-frames:v", "1", "-q:v", "2", str(thumb_path)]
     proc = await asyncio.create_subprocess_exec(
         *cmd, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
     await proc.wait()
-    if thumb_path.exists() and thumb_path.stat().st_size > 500:
+    if safe_stat_size(thumb_path) > 500:
         return str(thumb_path)
     return None
 
@@ -202,10 +257,13 @@ async def download_video(session, url, out_path, retries=3):
         try:
             async with session.get(url, timeout=aiohttp.ClientTimeout(total=3600)) as resp:
                 if resp.status == 200:
+                    # Ensure parent directory exists (Railway ephemeral fs may reset)
+                    out_path = Path(out_path) if not isinstance(out_path, Path) else out_path
+                    out_path.parent.mkdir(parents=True, exist_ok=True)
                     with open(out_path, 'wb') as f:
                         async for chunk in resp.content.iter_chunked(1024*1024):
                             f.write(chunk)
-                    if out_path.stat().st_size > 1000:
+                    if safe_stat_size(out_path) > 1000:
                         return True
                     out_path.unlink(missing_ok=True)
         except Exception as e:
@@ -434,7 +492,7 @@ async def status_handler(event):
         f"**Status**\n\n"
         f"Headers: {h}\n"
         f"Videos: {len(stats)}\n"
-        f"DB: {db.path.stat().st_size // 1024}KB"
+        f"DB: {db.db_size_kb()}KB"
     )
 
 
@@ -444,8 +502,20 @@ async def main():
         print("Missing env: BOT_TOKEN, API_ID, API_HASH")
         sys.exit(1)
 
+    # ── Startup validation: ensure all required dirs/files exist ──
+    DOWNLOADS_DIR.mkdir(parents=True, exist_ok=True)
+    THUMBS_DIR.mkdir(parents=True, exist_ok=True)
+    # Ensure the database directory exists and DB file has valid data
+    db.path.parent.mkdir(parents=True, exist_ok=True)
+    if not safe_exists(db.path):
+        safe_write_json(db.path, DEFAULT_DB)
+        print(f"Created database: {db.path}")
+    # Session file directory
+    Path("downloader_bot.session").parent.mkdir(parents=True, exist_ok=True)
+
     print(f"Course Downloader Bot v2.0")
     print(f"Auth headers: {api.debug_headers()}")
+    print(f"DB: {db.db_size_kb()}KB at {db.path}")
 
     await bot.start(bot_token=BOT_TOKEN)
     me = await bot.get_me()
