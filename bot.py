@@ -238,21 +238,26 @@ async def login_handler(event):
 
     # Validate Indian phone number
     phone = phone.strip()
-    if not phone.startswith('+'):
-        if len(phone) == 10:
-            phone = "+91" + phone
-        elif len(phone) == 12 and phone.startswith('91'):
-            phone = "+" + phone
-        else:
-            phone = "+91" + phone
+    # Remove any + or spaces
+    phone = phone.replace("+", "").replace(" ", "").replace("-", "")
+    # Take last 10 digits if there's a country code
+    if len(phone) > 10:
+        phone = phone[-10:]
+    if len(phone) != 10 or not phone.isdigit():
+        await event.reply(
+            "❌ **Invalid number.** Send your 10-digit phone number:\n"
+            "`/login 9876543210`"
+        )
+        return
+    phone_display = "+91" + phone
 
-    msg = await event.reply(f"📱 Sending OTP to `{phone}`...")
+    msg = await event.reply(f"📱 Sending OTP to `{phone_display}`...")
 
     status, resp = await api.send_otp(phone)
     if status == 200 and isinstance(resp, dict) and resp.get("success"):
-        PENDING_LOGIN[event.sender_id] = {"phone": phone, "step": "otp"}
+        PENDING_LOGIN[event.sender_id] = {"phone": phone, "phone_display": phone_display, "step": "otp"}
         await msg.edit(
-            f"✅ **OTP sent to** `{phone}`\n\n"
+            f"✅ **OTP sent to** `{phone_display}`\n\n"
             f"Enter the OTP code:\n"
             f"`/code 123456`"
         )
