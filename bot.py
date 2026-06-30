@@ -114,13 +114,35 @@ class StudyPiAPI:
         return None
 
     async def get_contents(self, batch_id, subject_id):
+        """Get lecture list for a subject. Returns list of lectures or None."""
         await self.ensure_session()
         url = f"{API_BASE}/contents.php"
         params = {"batch_id": batch_id, "subject_id": subject_id, "contentType": "LECTURES"}
         async with self.session.get(url, params=params, headers=self.headers) as resp:
             if resp.status == 200:
-                data = await resp.json()
-                return data.get("data", data.get("lectures", data))
+                try:
+                    data = await resp.json()
+                except:
+                    return None
+                # Try every possible path to find the lecture list
+                if isinstance(data, list):
+                    return data
+                # Direct key
+                for key in ("lectures", "data", "topics", "content", "items", "videos", "results"):
+                    val = data.get(key)
+                    if isinstance(val, list):
+                        return val
+                    if isinstance(val, dict):
+                        for sub_key in ("lectures", "topics", "content", "items", "videos", "list", "data", "results"):
+                            sub_val = val.get(sub_key)
+                            if isinstance(sub_val, list):
+                                return sub_val
+                # Fallback: return the JSON with debug info
+                print(f"get_contents raw response keys: {list(data.keys())}")
+                for k, v in data.items():
+                    print(f"  {k}: {type(v).__name__} {'len=' + str(len(v)) if isinstance(v, (list,dict)) else str(v)[:80]}")
+            elif resp.status == 401:
+                print("Auth failed: 401 on contents.php - invalid Bearer token")
         return None
 
     async def get_video_url(self, batch_id, child_id):
@@ -371,14 +393,20 @@ async def download_batch(event):
                     contents = [contents]
 
             if not contents or not isinstance(contents, list):
+                await event.reply(f"⚠️ {sub_name}: No lectures found (may need valid auth token)")
                 continue
+
+            await event.reply(f"📖 {sub_name}: Found {len(contents)} lectures, starting download...")
 
             for video in contents:
                 video_index[0] += 1
                 idx = video_index[0]
-                video_id = video.get('_id', video.get('id', video.get('childId', f'v_{idx}')))
-                video_name = video.get('topic', video.get('name', video.get('title', f'Lecture {idx}')))
-                video_url = video.get('video', video.get('url', video.get('videoUrl', '')))
+                # Find ID from multiple possible field names
+                video_id = video.get('_id', video.get('id', video.get('childId', video.get('lectureId', video.get('topicId', f'v_{idx}')))))
+                # Find name from multiple possible field names
+                video_name = video.get('topic', video.get('name', video.get('title', video.get('lectureName', video.get('topicName', f'Lecture {idx}')))))
+                # Find URL from multiple possible field names
+                video_url = video.get('video', video.get('url', video.get('videoUrl', video.get('lectureUrl', video.get('contentUrl', video.get('link', video.get('src', '')))))))
                 duration = int(video.get('duration', video.get('durationInSeconds', 0)))
 
                 if isinstance(video_url, dict):
@@ -388,6 +416,8 @@ async def download_batch(event):
                     video_url = video
 
                 if not video_url or db.is_downloaded(video_id):
+                    if not video_url and not db.is_downloaded(video_id):
+                        print(f"No URL for video: keys={list(video.keys())}")
                     continue
 
                 out_path = DOWNLOADS_DIR / f"{video_id}.mp4"
